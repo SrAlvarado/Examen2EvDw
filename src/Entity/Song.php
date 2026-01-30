@@ -5,6 +5,7 @@ namespace App\Entity;
 use App\Repository\SongRepository;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Annotation\Groups;
+use Symfony\Component\Serializer\Annotation\SerializedName;
 
 #[ORM\Entity(repositoryClass: SongRepository::class)]
 class Song
@@ -21,6 +22,7 @@ class Song
 
     #[ORM\Column]
     #[Groups(['activity:read'])]
+    #[SerializedName('duration_seconds')]
     private ?int $durationSeconds = null;
 
     #[ORM\ManyToOne(inversedBy: 'playList')]
