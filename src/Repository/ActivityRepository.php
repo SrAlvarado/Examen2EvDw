@@ -4,6 +4,7 @@ namespace App\Repository;
 
 use App\Entity\Activity;
 use Doctrine\Bundle\DoctrineBundle\Repository\ServiceEntityRepository;
+use Doctrine\ORM\QueryBuilder;
 use Doctrine\Persistence\ManagerRegistry;
 
 /**
@@ -11,14 +12,15 @@ use Doctrine\Persistence\ManagerRegistry;
  */
 class ActivityRepository extends ServiceEntityRepository
 {
+    private const DEFAULT_SORT_FIELD = 'a.dateStart';
+    private const SORT_ORDER_ASC = 'ASC';
+    private const SORT_ORDER_DESC = 'DESC';
+
     public function __construct(ManagerRegistry $registry)
     {
         parent::__construct($registry, Activity::class);
     }
 
-    /**
-     * Find activities with optional filters, pagination and sorting
-     */
     public function findWithFilters(
         ?bool $onlyFree = true,
         ?string $type = null,
@@ -27,55 +29,78 @@ class ActivityRepository extends ServiceEntityRepository
         ?string $sort = 'date',
         ?string $order = 'desc'
     ): array {
-        $qb = $this->createQueryBuilder('a');
+        $queryBuilder = $this->createBaseQuery();
 
-        // Filter by type
-        if ($type !== null) {
-            $qb->andWhere('a.type = :type')
-               ->setParameter('type', $type);
-        }
+        $this->applyTypeFilter($queryBuilder, $type);
+        $this->applySorting($queryBuilder, $order);
 
-        // Sorting
-        $sortField = $sort === 'date' ? 'a.dateStart' : 'a.dateStart';
-        $sortOrder = strtoupper($order) === 'ASC' ? 'ASC' : 'DESC';
-        $qb->orderBy($sortField, $sortOrder);
+        $activities = $queryBuilder->getQuery()->getResult();
+        $activities = $this->filterByAvailability($activities, $onlyFree);
 
-        $activities = $qb->getQuery()->getResult();
-
-        // Filter only activities with free places in PHP
-        if ($onlyFree === true) {
-            $activities = array_filter($activities, function (Activity $activity) {
-                return $activity->hasFreePlaces();
-            });
-            $activities = array_values($activities);
-        }
-
-        // Pagination in PHP
-        $offset = ($page - 1) * $pageSize;
-        return array_slice($activities, $offset, $pageSize);
+        return $this->paginate($activities, $page, $pageSize);
     }
 
-    /**
-     * Count total activities with filters (for pagination metadata)
-     */
     public function countWithFilters(?bool $onlyFree = true, ?string $type = null): int
     {
-        $qb = $this->createQueryBuilder('a');
+        $queryBuilder = $this->createBaseQuery();
 
-        if ($type !== null) {
-            $qb->andWhere('a.type = :type')
-               ->setParameter('type', $type);
-        }
+        $this->applyTypeFilter($queryBuilder, $type);
 
-        $activities = $qb->getQuery()->getResult();
-
-        if ($onlyFree === true) {
-            $activities = array_filter($activities, function (Activity $activity) {
-                return $activity->hasFreePlaces();
-            });
-        }
+        $activities = $queryBuilder->getQuery()->getResult();
+        $activities = $this->filterByAvailability($activities, $onlyFree);
 
         return count($activities);
     }
-}
 
+    private function createBaseQuery(): QueryBuilder
+    {
+        return $this->createQueryBuilder('a');
+    }
+
+    private function applyTypeFilter(QueryBuilder $queryBuilder, ?string $type): void
+    {
+        if ($type === null) {
+            return;
+        }
+
+        $queryBuilder->andWhere('a.type = :type')
+                     ->setParameter('type', $type);
+    }
+
+    private function applySorting(QueryBuilder $queryBuilder, string $order): void
+    {
+        $sortOrder = $this->normalizeSortOrder($order);
+
+        $queryBuilder->orderBy(self::DEFAULT_SORT_FIELD, $sortOrder);
+    }
+
+    private function normalizeSortOrder(string $order): string
+    {
+        return strtoupper($order) === self::SORT_ORDER_ASC
+            ? self::SORT_ORDER_ASC
+            : self::SORT_ORDER_DESC;
+    }
+
+    private function filterByAvailability(array $activities, bool $onlyFree): array
+    {
+        if (!$onlyFree) {
+            return $activities;
+        }
+
+        $filtered = array_filter($activities, fn(Activity $activity) => $activity->hasFreePlaces());
+
+        return array_values($filtered);
+    }
+
+    private function paginate(array $activities, int $page, int $pageSize): array
+    {
+        $offset = $this->calculateOffset($page, $pageSize);
+
+        return array_slice($activities, $offset, $pageSize);
+    }
+
+    private function calculateOffset(int $page, int $pageSize): int
+    {
+        return ($page - 1) * $pageSize;
+    }
+}

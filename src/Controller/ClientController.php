@@ -12,39 +12,59 @@ use Symfony\Component\Serializer\SerializerInterface;
 #[Route('/clients')]
 class ClientController extends AbstractController
 {
-    // --- OBTENER INFORMACIÓN DE CLIENTE (GET) ---
+    private const ERROR_CLIENT_NOT_FOUND = 44;
+    private const ERROR_SERVER = 99;
+
     #[Route('/{id}', methods: ['GET'])]
     public function show(
         int $id,
         Request $request,
-        ClientRepository $clientRepo,
+        ClientRepository $clientRepository,
         SerializerInterface $serializer
     ): JsonResponse {
-        // Get query parameters
-        $withStatistics = filter_var($request->query->get('with_statistics', 'false'), FILTER_VALIDATE_BOOLEAN);
-        $withBookings = filter_var($request->query->get('with_bookings', 'false'), FILTER_VALIDATE_BOOLEAN);
+        $client = $clientRepository->find($id);
 
-        // Find client
-        $client = $clientRepo->find($id);
-        
-        if (!$client) {
-            return $this->error(44, 'Client not found');
+        if ($client === null) {
+            return $this->createErrorResponse(self::ERROR_CLIENT_NOT_FOUND, 'Client not found');
         }
 
-        // Set flags for serialization
+        $this->configureSerializationOptions($client, $request);
+
+        return $this->serializeAndRespond($client, $serializer);
+    }
+
+    private function configureSerializationOptions($client, Request $request): void
+    {
+        $withStatistics = $this->getBooleanQueryParam($request, 'with_statistics');
+        $withBookings = $this->getBooleanQueryParam($request, 'with_bookings');
+
         $client->setIncludeBookings($withBookings);
         $client->setIncludeStatistics($withStatistics);
+    }
 
+    private function getBooleanQueryParam(Request $request, string $paramName): bool
+    {
+        return filter_var(
+            $request->query->get($paramName, 'false'),
+            FILTER_VALIDATE_BOOLEAN
+        );
+    }
+
+    private function serializeAndRespond($client, SerializerInterface $serializer): JsonResponse
+    {
         try {
             $json = $serializer->serialize($client, 'json', ['groups' => 'client:read']);
             return new JsonResponse($json, 200, [], true);
-        } catch (\Exception $e) {
-            return $this->error(99, 'Server error: ' . $e->getMessage());
+        } catch (\Exception $exception) {
+            return $this->createErrorResponse(self::ERROR_SERVER, 'Server error: ' . $exception->getMessage());
         }
     }
 
-    private function error(int $code, string $description): JsonResponse
+    private function createErrorResponse(int $code, string $description): JsonResponse
     {
-        return new JsonResponse(['code' => $code, 'description' => $description], 400);
+        return new JsonResponse([
+            'code' => $code,
+            'description' => $description,
+        ], 400);
     }
 }

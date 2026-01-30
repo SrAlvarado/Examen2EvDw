@@ -11,124 +11,180 @@ use Doctrine\Persistence\ObjectManager;
 
 class AppFixtures extends Fixture
 {
+    private ObjectManager $manager;
+
     public function load(ObjectManager $manager): void
     {
-        // Create Clients
-        $client1 = new Client();
-        $client1->setName('Miguel Goyena')
-                ->setEmail('miguel_goyena@cuatrovientos.org')
-                ->setType('premium');
-        $manager->persist($client1);
+        $this->manager = $manager;
 
-        $client2 = new Client();
-        $client2->setName('Ana García')
-                ->setEmail('ana_garcia@email.com')
-                ->setType('standard');
-        $manager->persist($client2);
+        $clients = $this->createClients();
+        $activities = $this->createActivities();
+        $this->manager->flush();
 
-        $client3 = new Client();
-        $client3->setName('Carlos López')
-                ->setEmail('carlos_lopez@email.com')
-                ->setType('standard');
-        $manager->persist($client3);
+        $this->createBookings($clients, $activities);
+        $this->manager->flush();
+    }
 
-        // Create Activities with Songs (future activities)
-        $activity1 = new Activity();
-        $activity1->setType('BodyPump')
-                  ->setMaxParticipants(25)
-                  ->setDateStart(new \DateTime('+1 day 10:00'))
-                  ->setDateEnd(new \DateTime('+1 day 11:00'));
-        
-        $song1 = new Song();
-        $song1->setName('Pump It Up')->setDurationSeconds(245);
-        $activity1->addSong($song1);
-        
-        $song2 = new Song();
-        $song2->setName('Eye of the Tiger')->setDurationSeconds(280);
-        $activity1->addSong($song2);
-        
-        $manager->persist($activity1);
+    private function createClients(): array
+    {
+        return [
+            'premium' => $this->createClient('Miguel Goyena', 'miguel_goyena@cuatrovientos.org', Client::TYPE_PREMIUM),
+            'standard1' => $this->createClient('Ana García', 'ana_garcia@email.com', Client::TYPE_STANDARD),
+            'standard2' => $this->createClient('Carlos López', 'carlos_lopez@email.com', Client::TYPE_STANDARD),
+        ];
+    }
 
-        $activity2 = new Activity();
-        $activity2->setType('Spinning')
-                  ->setMaxParticipants(20)
-                  ->setDateStart(new \DateTime('+2 days 18:00'))
-                  ->setDateEnd(new \DateTime('+2 days 19:00'));
-        
-        $song3 = new Song();
-        $song3->setName('Push It')->setDurationSeconds(210);
-        $activity2->addSong($song3);
-        
-        $manager->persist($activity2);
+    private function createClient(string $name, string $email, string $type): Client
+    {
+        $client = new Client();
+        $client->setName($name)
+               ->setEmail($email)
+               ->setType($type);
 
-        $activity3 = new Activity();
-        $activity3->setType('Core')
-                  ->setMaxParticipants(15)
-                  ->setDateStart(new \DateTime('+3 days 09:00'))
-                  ->setDateEnd(new \DateTime('+3 days 09:45'));
-        
-        $song4 = new Song();
-        $song4->setName('Core Power')->setDurationSeconds(180);
-        $activity3->addSong($song4);
-        
-        $manager->persist($activity3);
+        $this->manager->persist($client);
 
-        // Create a full activity (no free places)
-        $activityFull = new Activity();
-        $activityFull->setType('BodyPump')
-                     ->setMaxParticipants(2)
-                     ->setDateStart(new \DateTime('+4 days 10:00'))
-                     ->setDateEnd(new \DateTime('+4 days 11:00'));
-        $manager->persist($activityFull);
+        return $client;
+    }
 
-        // Create past activity for statistics
-        $activityPast = new Activity();
-        $activityPast->setType('Spinning')
-                     ->setMaxParticipants(20)
-                     ->setDateStart(new \DateTime('-30 days 18:00'))
-                     ->setDateEnd(new \DateTime('-30 days 19:00'));
-        $manager->persist($activityPast);
+    private function createActivities(): array
+    {
+        return [
+            'bodyPump' => $this->createBodyPumpActivity(),
+            'spinning' => $this->createSpinningActivity(),
+            'core' => $this->createCoreActivity(),
+            'full' => $this->createFullActivity(),
+            'past1' => $this->createPastSpinningActivity(),
+            'past2' => $this->createPastCoreActivity(),
+        ];
+    }
 
-        $activityPast2 = new Activity();
-        $activityPast2->setType('Core')
-                      ->setMaxParticipants(15)
-                      ->setDateStart(new \DateTime('-60 days 09:00'))
-                      ->setDateEnd(new \DateTime('-60 days 09:45'));
-        $manager->persist($activityPast2);
+    private function createBodyPumpActivity(): Activity
+    {
+        $activity = $this->createActivity(
+            Activity::TYPE_BODYPUMP,
+            25,
+            '+1 day 10:00',
+            '+1 day 11:00'
+        );
 
-        $manager->flush();
+        $this->addSongToActivity($activity, 'Pump It Up', 245);
+        $this->addSongToActivity($activity, 'Eye of the Tiger', 280);
 
-        // Create bookings
-        $booking1 = new Booking();
-        $booking1->setClient($client1)->setActivity($activity1);
-        $manager->persist($booking1);
+        return $activity;
+    }
 
-        $booking2 = new Booking();
-        $booking2->setClient($client2)->setActivity($activity1);
-        $manager->persist($booking2);
+    private function createSpinningActivity(): Activity
+    {
+        $activity = $this->createActivity(
+            Activity::TYPE_SPINNING,
+            20,
+            '+2 days 18:00',
+            '+2 days 19:00'
+        );
 
-        $booking3 = new Booking();
-        $booking3->setClient($client1)->setActivity($activity2);
-        $manager->persist($booking3);
+        $this->addSongToActivity($activity, 'Push It', 210);
 
-        // Fill the full activity
-        $bookingFull1 = new Booking();
-        $bookingFull1->setClient($client2)->setActivity($activityFull);
-        $manager->persist($bookingFull1);
+        return $activity;
+    }
 
-        $bookingFull2 = new Booking();
-        $bookingFull2->setClient($client3)->setActivity($activityFull);
-        $manager->persist($bookingFull2);
+    private function createCoreActivity(): Activity
+    {
+        $activity = $this->createActivity(
+            Activity::TYPE_CORE,
+            15,
+            '+3 days 09:00',
+            '+3 days 09:45'
+        );
 
-        // Past bookings for statistics
-        $bookingPast1 = new Booking();
-        $bookingPast1->setClient($client1)->setActivity($activityPast);
-        $manager->persist($bookingPast1);
+        $this->addSongToActivity($activity, 'Core Power', 180);
 
-        $bookingPast2 = new Booking();
-        $bookingPast2->setClient($client1)->setActivity($activityPast2);
-        $manager->persist($bookingPast2);
+        return $activity;
+    }
 
-        $manager->flush();
+    private function createFullActivity(): Activity
+    {
+        return $this->createActivity(
+            Activity::TYPE_BODYPUMP,
+            2,
+            '+4 days 10:00',
+            '+4 days 11:00'
+        );
+    }
+
+    private function createPastSpinningActivity(): Activity
+    {
+        return $this->createActivity(
+            Activity::TYPE_SPINNING,
+            20,
+            '-30 days 18:00',
+            '-30 days 19:00'
+        );
+    }
+
+    private function createPastCoreActivity(): Activity
+    {
+        return $this->createActivity(
+            Activity::TYPE_CORE,
+            15,
+            '-60 days 09:00',
+            '-60 days 09:45'
+        );
+    }
+
+    private function createActivity(string $type, int $maxParticipants, string $startOffset, string $endOffset): Activity
+    {
+        $activity = new Activity();
+        $activity->setType($type)
+                 ->setMaxParticipants($maxParticipants)
+                 ->setDateStart(new \DateTime($startOffset))
+                 ->setDateEnd(new \DateTime($endOffset));
+
+        $this->manager->persist($activity);
+
+        return $activity;
+    }
+
+    private function addSongToActivity(Activity $activity, string $name, int $duration): void
+    {
+        $song = new Song();
+        $song->setName($name)
+             ->setDurationSeconds($duration);
+
+        $activity->addSong($song);
+    }
+
+    private function createBookings(array $clients, array $activities): void
+    {
+        $this->createFutureBookings($clients, $activities);
+        $this->createFullActivityBookings($clients, $activities);
+        $this->createPastBookingsForStatistics($clients, $activities);
+    }
+
+    private function createFutureBookings(array $clients, array $activities): void
+    {
+        $this->createBooking($clients['premium'], $activities['bodyPump']);
+        $this->createBooking($clients['standard1'], $activities['bodyPump']);
+        $this->createBooking($clients['premium'], $activities['spinning']);
+    }
+
+    private function createFullActivityBookings(array $clients, array $activities): void
+    {
+        $this->createBooking($clients['standard1'], $activities['full']);
+        $this->createBooking($clients['standard2'], $activities['full']);
+    }
+
+    private function createPastBookingsForStatistics(array $clients, array $activities): void
+    {
+        $this->createBooking($clients['premium'], $activities['past1']);
+        $this->createBooking($clients['premium'], $activities['past2']);
+    }
+
+    private function createBooking(Client $client, Activity $activity): void
+    {
+        $booking = new Booking();
+        $booking->setClient($client)
+                ->setActivity($activity);
+
+        $this->manager->persist($booking);
     }
 }
