@@ -4,6 +4,7 @@ namespace App\Controller;
 
 use App\Entity\Booking;
 use App\Repository\ActivityRepository;
+use App\Repository\BookingRepository;
 use App\Repository\ClientRepository;
 use Doctrine\ORM\EntityManagerInterface;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
@@ -21,6 +22,7 @@ class BookingController extends AbstractController
         Request $request,
         ActivityRepository $activityRepo,
         ClientRepository $clientRepo,
+        BookingRepository $bookingRepo,
         EntityManagerInterface $em,
         SerializerInterface $serializer
     ): JsonResponse {
@@ -56,6 +58,14 @@ class BookingController extends AbstractController
         foreach ($activity->getBookings() as $existingBooking) {
             if ($existingBooking->getClient()->getId() === $client->getId()) {
                 return $this->error(42, 'Client already booked this activity');
+            }
+        }
+
+        // Check standard user weekly limit (max 2 bookings per week Monday-Sunday)
+        if ($client->getType() === 'standard') {
+            $bookingsThisWeek = $bookingRepo->countBookingsInWeek($client, $activity->getDateStart());
+            if ($bookingsThisWeek >= 2) {
+                return $this->error(43, 'Standard users cannot book more than 2 activities per week');
             }
         }
 
