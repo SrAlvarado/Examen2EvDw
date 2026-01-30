@@ -139,7 +139,18 @@ El proyecto incluye una suite de tests automatizados para validar la lógica y l
 ```bash
 # Ejecutar todos los tests
 php bin/phpunit
+
+# Ejecutar tests de un controlador específico
+php bin/phpunit tests/Controller/BookingControllerTest.php
 ```
+
+**Cobertura de Tests:**
+- ✅ **Unit Tests:** Validación de Entidades y DTOs.
+- ✅ **Functional Tests:**
+  - `GET /activities`: Filtros, paginación, ordenación y estructura.
+  - `GET /clients/{id}`: Datos básicos y relaciones opcionales.
+  - `POST /bookings`: Validaciones de negocio (plazas, duplicados, límites).
+
 
 
 ---
