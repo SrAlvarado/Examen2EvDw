@@ -132,6 +132,16 @@ echo {"activity_id": 9, "client_id": 4} > booking.json
 curl -X POST -H "Content-Type: application/json" -d @booking.json http://localhost:8000/bookings
 ```
 
+## Testing Automatizado (PHPUnit)
+
+El proyecto incluye una suite de tests automatizados para validar la lógica y los endpoints.
+
+```bash
+# Ejecutar todos los tests
+php bin/phpunit
+```
+
+
 ---
 
 ## Códigos de Error
