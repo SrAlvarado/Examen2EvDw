@@ -7,12 +7,15 @@ use Doctrine\Common\Collections\ArrayCollection;
 use Doctrine\Common\Collections\Collection;
 use Doctrine\ORM\Mapping as ORM;
 use Symfony\Component\Serializer\Annotation\Groups;
-use Symfony\Component\Serializer\Annotation\SerializedName;
 use Symfony\Component\Serializer\Annotation\Ignore;
+use Symfony\Component\Serializer\Annotation\SerializedName;
 
 #[ORM\Entity(repositoryClass: ClientRepository::class)]
 class Client
 {
+    public const TYPE_STANDARD = 'standard';
+    public const TYPE_PREMIUM = 'premium';
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column]
@@ -29,16 +32,14 @@ class Client
 
     #[ORM\Column(length: 50)]
     #[Groups(['client:read'])]
-    private ?string $type = 'standard';
+    private ?string $type = self::TYPE_STANDARD;
 
     #[ORM\OneToMany(mappedBy: 'client', targetEntity: Booking::class, cascade: ['persist', 'remove'])]
     private Collection $bookings;
 
-    // Flag to include bookings in serialization
     #[Ignore]
     private bool $includeBookings = false;
 
-    // Flag to include statistics in serialization
     #[Ignore]
     private bool $includeStatistics = false;
 
@@ -85,6 +86,16 @@ class Client
         return $this;
     }
 
+    public function isStandardUser(): bool
+    {
+        return $this->type === self::TYPE_STANDARD;
+    }
+
+    public function isPremiumUser(): bool
+    {
+        return $this->type === self::TYPE_PREMIUM;
+    }
+
     /**
      * @return Collection<int, Booking>
      */
@@ -122,26 +133,7 @@ class Client
             return null;
         }
 
-        $result = [];
-        $now = new \DateTime();
-        foreach ($this->bookings as $booking) {
-            // Only include future/current bookings
-            if ($booking->getActivity()->getDateEnd() >= $now) {
-                $result[] = [
-                    'id' => $booking->getId(),
-                    'activity' => [
-                        'id' => $booking->getActivity()->getId(),
-                        'type' => $booking->getActivity()->getType(),
-                        'max_participants' => $booking->getActivity()->getMaxParticipants(),
-                        'clients_signed' => $booking->getActivity()->getClientsSigned(),
-                        'date_start' => $booking->getActivity()->getDateStart()->format('c'),
-                        'date_end' => $booking->getActivity()->getDateEnd()->format('c'),
-                    ],
-                    'client_id' => $this->id,
-                ];
-            }
-        }
-        return $result;
+        return $this->buildFutureBookingsArray();
     }
 
     #[Groups(['client:read'])]
@@ -152,50 +144,133 @@ class Client
             return null;
         }
 
+        return $this->buildStatisticsByYear();
+    }
+
+    private function buildFutureBookingsArray(): array
+    {
+        $result = [];
         $now = new \DateTime();
+
+        foreach ($this->bookings as $booking) {
+            if ($this->isFutureBooking($booking, $now)) {
+                $result[] = $this->formatBookingData($booking);
+            }
+        }
+
+        return $result;
+    }
+
+    private function isFutureBooking(Booking $booking, \DateTime $referenceDate): bool
+    {
+        return $booking->getActivity()->getDateEnd() >= $referenceDate;
+    }
+
+    private function formatBookingData(Booking $booking): array
+    {
+        $activity = $booking->getActivity();
+
+        return [
+            'id' => $booking->getId(),
+            'activity' => [
+                'id' => $activity->getId(),
+                'type' => $activity->getType(),
+                'max_participants' => $activity->getMaxParticipants(),
+                'clients_signed' => $activity->getClientsSigned(),
+                'date_start' => $activity->getDateStart()->format('c'),
+                'date_end' => $activity->getDateEnd()->format('c'),
+            ],
+            'client_id' => $this->id,
+        ];
+    }
+
+    private function buildStatisticsByYear(): array
+    {
+        $now = new \DateTime();
+        $rawStatistics = $this->aggregatePastActivityStatistics($now);
+
+        return $this->formatStatisticsForResponse($rawStatistics);
+    }
+
+    private function aggregatePastActivityStatistics(\DateTime $referenceDate): array
+    {
         $statisticsByYear = [];
 
         foreach ($this->bookings as $booking) {
             $activity = $booking->getActivity();
-            // Only include past activities
-            if ($activity->getDateEnd() < $now) {
-                $year = (int) $activity->getDateEnd()->format('Y');
-                $type = $activity->getType();
-                
-                // Calculate duration in minutes
-                $duration = ($activity->getDateEnd()->getTimestamp() - $activity->getDateStart()->getTimestamp()) / 60;
 
-                if (!isset($statisticsByYear[$year])) {
-                    $statisticsByYear[$year] = [];
-                }
-                if (!isset($statisticsByYear[$year][$type])) {
-                    $statisticsByYear[$year][$type] = [
-                        'num_activities' => 0,
-                        'num_minutes' => 0,
-                    ];
-                }
-
-                $statisticsByYear[$year][$type]['num_activities']++;
-                $statisticsByYear[$year][$type]['num_minutes'] += (int) $duration;
+            if ($this->isPastActivity($activity, $referenceDate)) {
+                $this->addActivityToStatistics($statisticsByYear, $activity);
             }
         }
 
-        // Format the result according to OpenAPI spec
+        return $statisticsByYear;
+    }
+
+    private function isPastActivity(Activity $activity, \DateTime $referenceDate): bool
+    {
+        return $activity->getDateEnd() < $referenceDate;
+    }
+
+    private function addActivityToStatistics(array &$statistics, Activity $activity): void
+    {
+        $year = (int) $activity->getDateEnd()->format('Y');
+        $type = $activity->getType();
+        $durationMinutes = $this->calculateActivityDurationMinutes($activity);
+
+        $this->initializeYearAndType($statistics, $year, $type);
+
+        $statistics[$year][$type]['num_activities']++;
+        $statistics[$year][$type]['num_minutes'] += $durationMinutes;
+    }
+
+    private function calculateActivityDurationMinutes(Activity $activity): int
+    {
+        $startTimestamp = $activity->getDateStart()->getTimestamp();
+        $endTimestamp = $activity->getDateEnd()->getTimestamp();
+
+        return (int) (($endTimestamp - $startTimestamp) / 60);
+    }
+
+    private function initializeYearAndType(array &$statistics, int $year, string $type): void
+    {
+        if (!isset($statistics[$year])) {
+            $statistics[$year] = [];
+        }
+
+        if (!isset($statistics[$year][$type])) {
+            $statistics[$year][$type] = [
+                'num_activities' => 0,
+                'num_minutes' => 0,
+            ];
+        }
+    }
+
+    private function formatStatisticsForResponse(array $rawStatistics): array
+    {
         $result = [];
-        foreach ($statisticsByYear as $year => $types) {
-            $statisticsByType = [];
-            foreach ($types as $type => $stats) {
-                $statisticsByType[] = [
-                    'type' => $type,
-                    'statistics' => $stats,
-                ];
-            }
+
+        foreach ($rawStatistics as $year => $types) {
             $result[] = [
                 'year' => $year,
-                'statistics_by_type' => $statisticsByType,
+                'statistics_by_type' => $this->formatTypeStatistics($types),
             ];
         }
 
         return $result;
+    }
+
+    private function formatTypeStatistics(array $types): array
+    {
+        $formatted = [];
+
+        foreach ($types as $type => $stats) {
+            $formatted[] = [
+                'type' => $type,
+                'statistics' => $stats,
+            ];
+        }
+
+        return $formatted;
     }
 }

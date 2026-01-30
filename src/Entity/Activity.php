@@ -13,6 +13,16 @@ use Symfony\Component\Serializer\Annotation\SerializedName;
 #[ORM\Entity(repositoryClass: ActivityRepository::class)]
 class Activity
 {
+    public const TYPE_BODYPUMP = 'BodyPump';
+    public const TYPE_SPINNING = 'Spinning';
+    public const TYPE_CORE = 'Core';
+
+    public const VALID_TYPES = [
+        self::TYPE_BODYPUMP,
+        self::TYPE_SPINNING,
+        self::TYPE_CORE,
+    ];
+
     #[ORM\Id]
     #[ORM\GeneratedValue]
     #[ORM\Column]
@@ -139,11 +149,31 @@ class Activity
     #[SerializedName('clients_signed')]
     public function getClientsSigned(): int
     {
-        return count($this->bookings);
+        return $this->bookings->count();
     }
 
     public function hasFreePlaces(): bool
     {
         return $this->getClientsSigned() < $this->maxParticipants;
+    }
+
+    public function getAvailablePlaces(): int
+    {
+        return $this->maxParticipants - $this->getClientsSigned();
+    }
+
+    public function isFull(): bool
+    {
+        return !$this->hasFreePlaces();
+    }
+
+    public function isClientAlreadyBooked(Client $client): bool
+    {
+        foreach ($this->bookings as $booking) {
+            if ($booking->getClient()->getId() === $client->getId()) {
+                return true;
+            }
+        }
+        return false;
     }
 }

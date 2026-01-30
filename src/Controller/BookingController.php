@@ -2,7 +2,9 @@
 
 namespace App\Controller;
 
+use App\Entity\Activity;
 use App\Entity\Booking;
+use App\Entity\Client;
 use App\Repository\ActivityRepository;
 use App\Repository\BookingRepository;
 use App\Repository\ClientRepository;
@@ -16,77 +18,145 @@ use Symfony\Component\Serializer\SerializerInterface;
 #[Route('/bookings')]
 class BookingController extends AbstractController
 {
-    // --- CREAR RESERVA (POST) ---
+    private const STANDARD_USER_WEEKLY_LIMIT = 2;
+
+    private const ERROR_ACTIVITY_ID_REQUIRED = 21;
+    private const ERROR_CLIENT_ID_REQUIRED = 22;
+    private const ERROR_ACTIVITY_NOT_FOUND = 31;
+    private const ERROR_CLIENT_NOT_FOUND = 32;
+    private const ERROR_NO_FREE_PLACES = 41;
+    private const ERROR_ALREADY_BOOKED = 42;
+    private const ERROR_WEEKLY_LIMIT_EXCEEDED = 43;
+    private const ERROR_SERVER = 99;
+
     #[Route('', methods: ['POST'])]
     public function create(
         Request $request,
-        ActivityRepository $activityRepo,
-        ClientRepository $clientRepo,
-        BookingRepository $bookingRepo,
-        EntityManagerInterface $em,
+        ActivityRepository $activityRepository,
+        ClientRepository $clientRepository,
+        BookingRepository $bookingRepository,
+        EntityManagerInterface $entityManager,
         SerializerInterface $serializer
     ): JsonResponse {
-        $data = json_decode($request->getContent(), true);
+        $requestData = $this->parseRequestData($request);
 
-        // Validations
+        $validationError = $this->validateRequiredFields($requestData);
+        if ($validationError !== null) {
+            return $validationError;
+        }
+
+        $activity = $activityRepository->find($requestData['activity_id']);
+        if ($activity === null) {
+            return $this->createErrorResponse(self::ERROR_ACTIVITY_NOT_FOUND, 'Activity not found');
+        }
+
+        $client = $clientRepository->find($requestData['client_id']);
+        if ($client === null) {
+            return $this->createErrorResponse(self::ERROR_CLIENT_NOT_FOUND, 'Client not found');
+        }
+
+        $businessValidationError = $this->validateBusinessRules($activity, $client, $bookingRepository);
+        if ($businessValidationError !== null) {
+            return $businessValidationError;
+        }
+
+        return $this->persistAndReturnBooking($activity, $client, $entityManager, $serializer);
+    }
+
+    private function parseRequestData(Request $request): array
+    {
+        return json_decode($request->getContent(), true) ?? [];
+    }
+
+    private function validateRequiredFields(array $data): ?JsonResponse
+    {
         if (empty($data['activity_id'])) {
-            return $this->error(21, 'activity_id is mandatory');
+            return $this->createErrorResponse(self::ERROR_ACTIVITY_ID_REQUIRED, 'activity_id is mandatory');
         }
 
         if (empty($data['client_id'])) {
-            return $this->error(22, 'client_id is mandatory');
+            return $this->createErrorResponse(self::ERROR_CLIENT_ID_REQUIRED, 'client_id is mandatory');
         }
 
-        // Find activity
-        $activity = $activityRepo->find($data['activity_id']);
-        if (!$activity) {
-            return $this->error(31, 'Activity not found');
+        return null;
+    }
+
+    private function validateBusinessRules(
+        Activity $activity,
+        Client $client,
+        BookingRepository $bookingRepository
+    ): ?JsonResponse {
+        if ($activity->isFull()) {
+            return $this->createErrorResponse(self::ERROR_NO_FREE_PLACES, 'Activity is full, no free places available');
         }
 
-        // Find client
-        $client = $clientRepo->find($data['client_id']);
-        if (!$client) {
-            return $this->error(32, 'Client not found');
+        if ($activity->isClientAlreadyBooked($client)) {
+            return $this->createErrorResponse(self::ERROR_ALREADY_BOOKED, 'Client already booked this activity');
         }
 
-        // Check if activity has free places
-        if (!$activity->hasFreePlaces()) {
-            return $this->error(41, 'Activity is full, no free places available');
+        if ($this->exceedsStandardUserWeeklyLimit($client, $activity, $bookingRepository)) {
+            return $this->createErrorResponse(
+                self::ERROR_WEEKLY_LIMIT_EXCEEDED,
+                'Standard users cannot book more than 2 activities per week'
+            );
         }
 
-        // Check if client already booked this activity
-        foreach ($activity->getBookings() as $existingBooking) {
-            if ($existingBooking->getClient()->getId() === $client->getId()) {
-                return $this->error(42, 'Client already booked this activity');
-            }
+        return null;
+    }
+
+    private function exceedsStandardUserWeeklyLimit(
+        Client $client,
+        Activity $activity,
+        BookingRepository $bookingRepository
+    ): bool {
+        if (!$client->isStandardUser()) {
+            return false;
         }
 
-        // Check standard user weekly limit (max 2 bookings per week Monday-Sunday)
-        if ($client->getType() === 'standard') {
-            $bookingsThisWeek = $bookingRepo->countBookingsInWeek($client, $activity->getDateStart());
-            if ($bookingsThisWeek >= 2) {
-                return $this->error(43, 'Standard users cannot book more than 2 activities per week');
-            }
-        }
+        $bookingsThisWeek = $bookingRepository->countBookingsInWeek($client, $activity->getDateStart());
 
-        // Create booking
+        return $bookingsThisWeek >= self::STANDARD_USER_WEEKLY_LIMIT;
+    }
+
+    private function persistAndReturnBooking(
+        Activity $activity,
+        Client $client,
+        EntityManagerInterface $entityManager,
+        SerializerInterface $serializer
+    ): JsonResponse {
         try {
-            $booking = new Booking();
-            $booking->setActivity($activity);
-            $booking->setClient($client);
+            $booking = $this->createBooking($activity, $client);
 
-            $em->persist($booking);
-            $em->flush();
+            $entityManager->persist($booking);
+            $entityManager->flush();
 
-            $json = $serializer->serialize($booking, 'json', ['groups' => 'booking:read']);
-            return new JsonResponse($json, 200, [], true);
-        } catch (\Exception $e) {
-            return $this->error(99, 'Server error: ' . $e->getMessage());
+            return $this->createSuccessResponse($booking, $serializer);
+        } catch (\Exception $exception) {
+            return $this->createErrorResponse(self::ERROR_SERVER, 'Server error: ' . $exception->getMessage());
         }
     }
 
-    private function error(int $code, string $description): JsonResponse
+    private function createBooking(Activity $activity, Client $client): Booking
     {
-        return new JsonResponse(['code' => $code, 'description' => $description], 400);
+        $booking = new Booking();
+        $booking->setActivity($activity);
+        $booking->setClient($client);
+
+        return $booking;
+    }
+
+    private function createSuccessResponse(Booking $booking, SerializerInterface $serializer): JsonResponse
+    {
+        $json = $serializer->serialize($booking, 'json', ['groups' => 'booking:read']);
+
+        return new JsonResponse($json, 200, [], true);
+    }
+
+    private function createErrorResponse(int $code, string $description): JsonResponse
+    {
+        return new JsonResponse([
+            'code' => $code,
+            'description' => $description,
+        ], 400);
     }
 }

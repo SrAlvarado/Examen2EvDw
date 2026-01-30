@@ -2,6 +2,7 @@
 
 namespace App\Controller;
 
+use App\Entity\Activity;
 use App\Repository\ActivityRepository;
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
@@ -12,60 +13,129 @@ use Symfony\Component\Serializer\SerializerInterface;
 #[Route('/activities')]
 class ActivityController extends AbstractController
 {
-    // --- LISTAR ACTIVIDADES (GET) ---
+    private const DEFAULT_PAGE = 1;
+    private const DEFAULT_PAGE_SIZE = 10;
+    private const DEFAULT_SORT = 'date';
+    private const DEFAULT_ORDER = 'desc';
+    private const VALID_SORT_OPTIONS = ['date'];
+    private const VALID_ORDER_OPTIONS = ['asc', 'desc'];
+
     #[Route('', methods: ['GET'])]
     public function list(
-        Request $request, 
-        ActivityRepository $activityRepo, 
+        Request $request,
+        ActivityRepository $activityRepository,
         SerializerInterface $serializer
     ): JsonResponse {
-        // Get query parameters
+        $queryParams = $this->extractQueryParameters($request);
+
+        $validationError = $this->validateQueryParameters($queryParams);
+        if ($validationError !== null) {
+            return $validationError;
+        }
+
+        return $this->fetchAndReturnActivities($activityRepository, $serializer, $queryParams);
+    }
+
+    private function extractQueryParameters(Request $request): array
+    {
         $onlyFreeParam = $request->query->get('onlyfree');
-        $onlyFree = $onlyFreeParam === null ? true : filter_var($onlyFreeParam, FILTER_VALIDATE_BOOLEAN);
-        
-        $type = $request->query->get('type');
-        $page = (int) ($request->query->get('page') ?? 1);
-        $pageSize = (int) ($request->query->get('page_size') ?? 10);
-        $sort = $request->query->get('sort') ?? 'date';
-        $order = $request->query->get('order') ?? 'desc';
 
-        // Validate type if provided
-        $validTypes = ['BodyPump', 'Spinning', 'Core'];
-        if ($type !== null && !in_array($type, $validTypes)) {
-            return $this->error(21, 'Invalid activity type. Must be one of: BodyPump, Spinning, Core');
+        return [
+            'onlyFree' => $onlyFreeParam === null ? true : filter_var($onlyFreeParam, FILTER_VALIDATE_BOOLEAN),
+            'type' => $request->query->get('type'),
+            'page' => (int) ($request->query->get('page') ?? self::DEFAULT_PAGE),
+            'pageSize' => (int) ($request->query->get('page_size') ?? self::DEFAULT_PAGE_SIZE),
+            'sort' => $request->query->get('sort') ?? self::DEFAULT_SORT,
+            'order' => $request->query->get('order') ?? self::DEFAULT_ORDER,
+        ];
+    }
+
+    private function validateQueryParameters(array $params): ?JsonResponse
+    {
+        if ($params['type'] !== null && !$this->isValidActivityType($params['type'])) {
+            return $this->createErrorResponse(21, $this->buildInvalidTypeMessage());
         }
 
-        // Validate sort
-        if ($sort !== 'date') {
-            return $this->error(22, 'Invalid sort parameter. Must be: date');
+        if (!$this->isValidSortOption($params['sort'])) {
+            return $this->createErrorResponse(22, 'Invalid sort parameter. Must be: date');
         }
 
-        // Validate order
-        if (!in_array(strtolower($order), ['asc', 'desc'])) {
-            return $this->error(23, 'Invalid order parameter. Must be: asc or desc');
+        if (!$this->isValidOrderOption($params['order'])) {
+            return $this->createErrorResponse(23, 'Invalid order parameter. Must be: asc or desc');
         }
 
+        return null;
+    }
+
+    private function isValidActivityType(string $type): bool
+    {
+        return in_array($type, Activity::VALID_TYPES, true);
+    }
+
+    private function isValidSortOption(string $sort): bool
+    {
+        return in_array($sort, self::VALID_SORT_OPTIONS, true);
+    }
+
+    private function isValidOrderOption(string $order): bool
+    {
+        return in_array(strtolower($order), self::VALID_ORDER_OPTIONS, true);
+    }
+
+    private function buildInvalidTypeMessage(): string
+    {
+        $validTypes = implode(', ', Activity::VALID_TYPES);
+        return "Invalid activity type. Must be one of: {$validTypes}";
+    }
+
+    private function fetchAndReturnActivities(
+        ActivityRepository $repository,
+        SerializerInterface $serializer,
+        array $params
+    ): JsonResponse {
         try {
-            $activities = $activityRepo->findWithFilters($onlyFree, $type, $page, $pageSize, $sort, $order);
-            $totalItems = $activityRepo->countWithFilters($onlyFree, $type);
+            $activities = $repository->findWithFilters(
+                $params['onlyFree'],
+                $params['type'],
+                $params['page'],
+                $params['pageSize'],
+                $params['sort'],
+                $params['order']
+            );
 
-            $response = [
-                'data' => json_decode($serializer->serialize($activities, 'json', ['groups' => 'activity:read']), true),
-                'meta' => [
-                    'page' => $page,
-                    'limit' => $pageSize,
-                    'total-items' => $totalItems,
-                ]
-            ];
+            $totalItems = $repository->countWithFilters($params['onlyFree'], $params['type']);
 
-            return new JsonResponse($response, 200);
-        } catch (\Exception $e) {
-            return $this->error(99, 'Server error: ' . $e->getMessage());
+            return $this->createSuccessResponse($serializer, $activities, $params, $totalItems);
+        } catch (\Exception $exception) {
+            return $this->createErrorResponse(99, 'Server error: ' . $exception->getMessage());
         }
     }
 
-    private function error(int $code, string $description): JsonResponse
+    private function createSuccessResponse(
+        SerializerInterface $serializer,
+        array $activities,
+        array $params,
+        int $totalItems
+    ): JsonResponse {
+        $serializedData = $serializer->serialize($activities, 'json', ['groups' => 'activity:read']);
+
+        $response = [
+            'data' => json_decode($serializedData, true),
+            'meta' => [
+                'page' => $params['page'],
+                'limit' => $params['pageSize'],
+                'total-items' => $totalItems,
+            ],
+        ];
+
+        return new JsonResponse($response, 200);
+    }
+
+    private function createErrorResponse(int $code, string $description): JsonResponse
     {
-        return new JsonResponse(['code' => $code, 'description' => $description], 400);
+        return new JsonResponse([
+            'code' => $code,
+            'description' => $description,
+        ], 400);
     }
 }
