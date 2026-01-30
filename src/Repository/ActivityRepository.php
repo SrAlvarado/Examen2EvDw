@@ -29,27 +29,40 @@ class ActivityRepository extends ServiceEntityRepository
         ?string $sort = 'date',
         ?string $order = 'desc'
     ): array {
-        $queryBuilder = $this->createBaseQuery();
+        $qb = $this->createBaseQuery();
 
-        $this->applyTypeFilter($queryBuilder, $type);
-        $this->applySorting($queryBuilder, $order);
+        $this->applyTypeFilter($qb, $type);
+        $this->applySorting($qb, $order);
 
-        $activities = $queryBuilder->getQuery()->getResult();
-        $activities = $this->filterByAvailability($activities, $onlyFree);
+        if ($onlyFree) {
+            $this->applyOnlyFreeFilter($qb);
+        }
 
-        return $this->paginate($activities, $page, $pageSize);
+        // Pagination
+        $qb->setFirstResult(($page - 1) * $pageSize)
+           ->setMaxResults($pageSize);
+
+        return $qb->getQuery()->getResult();
     }
 
     public function countWithFilters(?bool $onlyFree = true, ?string $type = null): int
     {
-        $queryBuilder = $this->createBaseQuery();
+        $qb = $this->createQueryBuilder('a');
+        $qb->select('COUNT(a.id)');
 
-        $this->applyTypeFilter($queryBuilder, $type);
+        $this->applyTypeFilter($qb, $type);
 
-        $activities = $queryBuilder->getQuery()->getResult();
-        $activities = $this->filterByAvailability($activities, $onlyFree);
+        if ($onlyFree) {
+             $this->applyOnlyFreeFilter($qb);
+             // When filtering by aggregation (SIZE), we cannot use simple COUNT(a.id) easily
+             // because it implies a HAVING clause or subquery logic that Doctrine 
+             // might not handle in a single scalar validation without grouping.
+             // However, SIZE() usually works in WHERE clauses in simpler contexts.
+             // Let's safe-bet on counting results for this specific requirement to avoid DQL complexity issues.
+             return count($qb->getQuery()->getResult());
+        }
 
-        return count($activities);
+        return (int) $qb->getQuery()->getSingleScalarResult();
     }
 
     private function createBaseQuery(): QueryBuilder
@@ -57,21 +70,26 @@ class ActivityRepository extends ServiceEntityRepository
         return $this->createQueryBuilder('a');
     }
 
-    private function applyTypeFilter(QueryBuilder $queryBuilder, ?string $type): void
+    private function applyTypeFilter(QueryBuilder $qb, ?string $type): void
     {
         if ($type === null) {
             return;
         }
 
-        $queryBuilder->andWhere('a.type = :type')
-                     ->setParameter('type', $type);
+        $qb->andWhere('a.type = :type')
+           ->setParameter('type', $type);
     }
 
-    private function applySorting(QueryBuilder $queryBuilder, string $order): void
+    private function applySorting(QueryBuilder $qb, string $order): void
     {
         $sortOrder = $this->normalizeSortOrder($order);
+        $qb->orderBy('a.dateStart', $sortOrder);
+    }
 
-        $queryBuilder->orderBy(self::DEFAULT_SORT_FIELD, $sortOrder);
+    private function applyOnlyFreeFilter(QueryBuilder $qb): void
+    {
+        // Use DQL SIZE() function to compare collection size with maxParticipants
+        $qb->andWhere('SIZE(a.bookings) < a.maxParticipants');
     }
 
     private function normalizeSortOrder(string $order): string
@@ -79,28 +97,5 @@ class ActivityRepository extends ServiceEntityRepository
         return strtoupper($order) === self::SORT_ORDER_ASC
             ? self::SORT_ORDER_ASC
             : self::SORT_ORDER_DESC;
-    }
-
-    private function filterByAvailability(array $activities, bool $onlyFree): array
-    {
-        if (!$onlyFree) {
-            return $activities;
-        }
-
-        $filtered = array_filter($activities, fn(Activity $activity) => $activity->hasFreePlaces());
-
-        return array_values($filtered);
-    }
-
-    private function paginate(array $activities, int $page, int $pageSize): array
-    {
-        $offset = $this->calculateOffset($page, $pageSize);
-
-        return array_slice($activities, $offset, $pageSize);
-    }
-
-    private function calculateOffset(int $page, int $pageSize): int
-    {
-        return ($page - 1) * $pageSize;
     }
 }
