@@ -19,8 +19,7 @@ class ClientController extends AbstractController
     public function show(
         int $id,
         Request $request,
-        ClientRepository $clientRepository,
-        SerializerInterface $serializer
+        ClientRepository $clientRepository
     ): JsonResponse {
         $client = $clientRepository->find($id);
 
@@ -28,18 +27,12 @@ class ClientController extends AbstractController
             return $this->createErrorResponse(self::ERROR_CLIENT_NOT_FOUND, 'Client not found');
         }
 
-        $this->configureSerializationOptions($client, $request);
-
-        return $this->serializeAndRespond($client, $serializer);
-    }
-
-    private function configureSerializationOptions($client, Request $request): void
-    {
         $withStatistics = $this->getBooleanQueryParam($request, 'with_statistics');
         $withBookings = $this->getBooleanQueryParam($request, 'with_bookings');
 
-        $client->setIncludeBookings($withBookings);
-        $client->setIncludeStatistics($withStatistics);
+        $responseDTO = \App\DTO\Response\ClientResponse::fromEntity($client, $withBookings, $withStatistics);
+
+        return new JsonResponse($responseDTO, 200);
     }
 
     private function getBooleanQueryParam(Request $request, string $paramName): bool
@@ -50,21 +43,9 @@ class ClientController extends AbstractController
         );
     }
 
-    private function serializeAndRespond($client, SerializerInterface $serializer): JsonResponse
-    {
-        try {
-            $json = $serializer->serialize($client, 'json', ['groups' => 'client:read']);
-            return new JsonResponse($json, 200, [], true);
-        } catch (\Exception $exception) {
-            return $this->createErrorResponse(self::ERROR_SERVER, 'Server error: ' . $exception->getMessage());
-        }
-    }
-
     private function createErrorResponse(int $code, string $description): JsonResponse
     {
-        return new JsonResponse([
-            'code' => $code,
-            'description' => $description,
-        ], 400);
+        $errorDTO = new \App\DTO\Response\ErrorResponse($code, $description);
+        return new JsonResponse($errorDTO->toArray(), 400);
     }
 }

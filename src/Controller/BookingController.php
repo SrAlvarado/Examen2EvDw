@@ -35,22 +35,21 @@ class BookingController extends AbstractController
         ActivityRepository $activityRepository,
         ClientRepository $clientRepository,
         BookingRepository $bookingRepository,
-        EntityManagerInterface $entityManager,
-        SerializerInterface $serializer
+        EntityManagerInterface $entityManager
     ): JsonResponse {
-        $requestData = $this->parseRequestData($request);
+        $bookingRequest = \App\DTO\Request\BookingRequest::fromArray(json_decode($request->getContent(), true) ?? []);
 
-        $validationError = $this->validateRequiredFields($requestData);
+        $validationError = $this->validateRequiredFields($bookingRequest);
         if ($validationError !== null) {
             return $validationError;
         }
 
-        $activity = $activityRepository->find($requestData['activity_id']);
+        $activity = $activityRepository->find($bookingRequest->activity_id);
         if ($activity === null) {
             return $this->createErrorResponse(self::ERROR_ACTIVITY_NOT_FOUND, 'Activity not found');
         }
 
-        $client = $clientRepository->find($requestData['client_id']);
+        $client = $clientRepository->find($bookingRequest->client_id);
         if ($client === null) {
             return $this->createErrorResponse(self::ERROR_CLIENT_NOT_FOUND, 'Client not found');
         }
@@ -60,21 +59,16 @@ class BookingController extends AbstractController
             return $businessValidationError;
         }
 
-        return $this->persistAndReturnBooking($activity, $client, $entityManager, $serializer);
+        return $this->persistAndReturnBooking($activity, $client, $entityManager);
     }
 
-    private function parseRequestData(Request $request): array
+    private function validateRequiredFields(\App\DTO\Request\BookingRequest $bookingRequest): ?JsonResponse
     {
-        return json_decode($request->getContent(), true) ?? [];
-    }
-
-    private function validateRequiredFields(array $data): ?JsonResponse
-    {
-        if (empty($data['activity_id'])) {
+        if (empty($bookingRequest->activity_id)) {
             return $this->createErrorResponse(self::ERROR_ACTIVITY_ID_REQUIRED, 'activity_id is mandatory');
         }
 
-        if (empty($data['client_id'])) {
+        if (empty($bookingRequest->client_id)) {
             return $this->createErrorResponse(self::ERROR_CLIENT_ID_REQUIRED, 'client_id is mandatory');
         }
 
@@ -121,8 +115,7 @@ class BookingController extends AbstractController
     private function persistAndReturnBooking(
         Activity $activity,
         Client $client,
-        EntityManagerInterface $entityManager,
-        SerializerInterface $serializer
+        EntityManagerInterface $entityManager
     ): JsonResponse {
         try {
             $booking = $this->createBooking($activity, $client);
@@ -130,7 +123,7 @@ class BookingController extends AbstractController
             $entityManager->persist($booking);
             $entityManager->flush();
 
-            return $this->createSuccessResponse($booking, $serializer);
+            return $this->createSuccessResponse($booking);
         } catch (\Exception $exception) {
             return $this->createErrorResponse(self::ERROR_SERVER, 'Server error: ' . $exception->getMessage());
         }
@@ -145,18 +138,15 @@ class BookingController extends AbstractController
         return $booking;
     }
 
-    private function createSuccessResponse(Booking $booking, SerializerInterface $serializer): JsonResponse
+    private function createSuccessResponse(Booking $booking): JsonResponse
     {
-        $json = $serializer->serialize($booking, 'json', ['groups' => 'booking:read']);
-
-        return new JsonResponse($json, 200, [], true);
+        $responseDTO = \App\DTO\Response\BookingResponse::fromEntity($booking);
+        return new JsonResponse($responseDTO, 200);
     }
 
     private function createErrorResponse(int $code, string $description): JsonResponse
     {
-        return new JsonResponse([
-            'code' => $code,
-            'description' => $description,
-        ], 400);
+        $errorDTO = new \App\DTO\Response\ErrorResponse($code, $description);
+        return new JsonResponse($errorDTO->toArray(), 400);
     }
 }

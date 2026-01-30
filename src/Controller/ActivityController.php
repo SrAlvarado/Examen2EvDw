@@ -117,25 +117,19 @@ class ActivityController extends AbstractController
         array $params,
         int $totalItems
     ): JsonResponse {
-        $serializedData = $serializer->serialize($activities, 'json', ['groups' => 'activity:read']);
+        $responseDTO = \App\DTO\Response\ActivityListResponse::fromEntities(
+            $activities,
+            $params['page'],
+            $params['pageSize'],
+            $totalItems
+        );
 
-        $response = [
-            'data' => json_decode($serializedData, true),
-            'meta' => [
-                'page' => $params['page'],
-                'limit' => $params['pageSize'],
-                'total-items' => $totalItems,
-            ],
-        ];
-
-        return new JsonResponse($response, 200);
+        return new JsonResponse($responseDTO->toArray(), 200);
     }
 
     private function createErrorResponse(int $code, string $description): JsonResponse
     {
-        return new JsonResponse([
-            'code' => $code,
-            'description' => $description,
-        ], 400);
+        $errorDTO = new \App\DTO\Response\ErrorResponse($code, $description);
+        return new JsonResponse($errorDTO->toArray(), 400);
     }
 }
