@@ -27,9 +27,7 @@ class ActivityRepository extends ServiceEntityRepository
         ?string $sort = 'date',
         ?string $order = 'desc'
     ): array {
-        $qb = $this->createQueryBuilder('a')
-            ->leftJoin('a.bookings', 'b')
-            ->addSelect('COUNT(b.id) as HIDDEN bookingCount');
+        $qb = $this->createQueryBuilder('a');
 
         // Filter by type
         if ($type !== null) {
@@ -37,24 +35,24 @@ class ActivityRepository extends ServiceEntityRepository
                ->setParameter('type', $type);
         }
 
-        $qb->groupBy('a.id');
-
-        // Filter only activities with free places
-        if ($onlyFree === true) {
-            $qb->having('COUNT(b.id) < a.maxParticipants');
-        }
-
         // Sorting
         $sortField = $sort === 'date' ? 'a.dateStart' : 'a.dateStart';
         $sortOrder = strtoupper($order) === 'ASC' ? 'ASC' : 'DESC';
         $qb->orderBy($sortField, $sortOrder);
 
-        // Pagination
-        $offset = ($page - 1) * $pageSize;
-        $qb->setFirstResult($offset)
-           ->setMaxResults($pageSize);
+        $activities = $qb->getQuery()->getResult();
 
-        return $qb->getQuery()->getResult();
+        // Filter only activities with free places in PHP
+        if ($onlyFree === true) {
+            $activities = array_filter($activities, function (Activity $activity) {
+                return $activity->hasFreePlaces();
+            });
+            $activities = array_values($activities);
+        }
+
+        // Pagination in PHP
+        $offset = ($page - 1) * $pageSize;
+        return array_slice($activities, $offset, $pageSize);
     }
 
     /**
@@ -62,22 +60,22 @@ class ActivityRepository extends ServiceEntityRepository
      */
     public function countWithFilters(?bool $onlyFree = true, ?string $type = null): int
     {
-        $qb = $this->createQueryBuilder('a')
-            ->select('COUNT(DISTINCT a.id)')
-            ->leftJoin('a.bookings', 'b');
+        $qb = $this->createQueryBuilder('a');
 
         if ($type !== null) {
             $qb->andWhere('a.type = :type')
                ->setParameter('type', $type);
         }
 
+        $activities = $qb->getQuery()->getResult();
+
         if ($onlyFree === true) {
-            $qb->groupBy('a.id')
-               ->having('COUNT(b.id) < a.maxParticipants');
-            
-            return count($qb->getQuery()->getResult());
+            $activities = array_filter($activities, function (Activity $activity) {
+                return $activity->hasFreePlaces();
+            });
         }
 
-        return (int) $qb->getQuery()->getSingleScalarResult();
+        return count($activities);
     }
 }
+
